@@ -14,23 +14,21 @@ const multer = require("multer");
 const Jimp = require("jimp");
 const path = require("path");
 
-const fs = require('fs').promises;
+const fs = require("fs").promises;
 
+const Mailer = require("../../config/mailer");
 
 const router = express.Router();
 
-
 const avatarUpload = multer({
   dest: "tmp",
-  limits: { fileSize: 5 * 1024 * 1024 }
+  limits: { fileSize: 5 * 1024 * 1024 },
 });
-
 
 const console = require("console");
 
 require("dotenv").config();
 const secret = process.env.SECRET_WORD;
-
 
 const signupSchema = Joi.object({
   email: Joi.string().email().required(),
@@ -52,12 +50,10 @@ router.post("/signup", async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(req.body.password, saltRounds);
 
-   
     const avatarURL = gravatar.url(req.body.email, {
-      s: "250", 
-      r: 'x',
-      d: "retro", 
-     
+      s: "250",
+      r: "x",
+      d: "retro",
     });
 
     const user = new User({
@@ -67,14 +63,19 @@ router.post("/signup", async (req, res) => {
       avatarURL,
     });
 
+    const verificationToken = Mailer.generateVerificationToken();
+    user.verificationToken = verificationToken;
+
     await user.save();
+
+    await Mailer.sendVerificationEmail(user.email, verificationToken);
 
     res.status(201).json({
       user: {
         email: user.email,
         subscription: user.subscription,
-        avatarURL: user.avatarURL
-
+        avatarURL: user.avatarURL,
+        verificationToken: user.verificationToken,
       },
     });
   } catch (error) {
@@ -169,7 +170,7 @@ router.get("/current", auth, async (req, res) => {
     res.status(200).json({
       email: currentUser.email,
       subscription: currentUser.subscription,
-      avatar: currentUser.avatarURL
+      avatar: currentUser.avatarURL,
     });
   } catch (error) {
     res.status(500).json({ message: "Internal Server Error" });
@@ -177,38 +178,86 @@ router.get("/current", auth, async (req, res) => {
 });
 
 router.patch(
-  '/avatars',
+  "/avatars",
   auth,
-  avatarUpload.single('avatar'),
+  avatarUpload.single("avatar"),
   async (req, res, next) => {
-      try {
-          const { file } = req
-          if (!file) {
-              return res.status(400).json({ message: 'No file provided' })
-          } 
-          const img = await Jimp.read(file.path)
-          await img.resize(250, 250).writeAsync(file.path)
-
-         
-          const newName = `avatar_${req.user._id}${path.extname(
-              file.originalname
-          )}`
-          const newLocation = path.join(
-              __dirname,
-              '../../public/avatars',
-              newName
-          )
-          await fs.rename(file.path, newLocation)
-
-          const avatarURL = `/avatars/${newName}`
-          await User.findByIdAndUpdate(req.user._id, { avatarURL })
-
-          res.status(200).json({ avatarURL })
-      } catch (error) {
-          next(error)
+    try {
+      const { file } = req;
+      if (!file) {
+        return res.status(400).json({ message: "No file provided" });
       }
-  }
-)
+      const img = await Jimp.read(file.path);
+      await img.resize(250, 250).writeAsync(file.path);
 
+      const newName = `avatar_${req.user._id}${path.extname(
+        file.originalname
+      )}`;
+      const newLocation = path.join(__dirname, "../../public/avatars", newName);
+      await fs.rename(file.path, newLocation);
+
+      const avatarURL = `/avatars/${newName}`;
+      await User.findByIdAndUpdate(req.user._id, { avatarURL });
+
+      res.status(200).json({ avatarURL });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post("/verify", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ message: "Missing required field email" });
+    }
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.verify) {
+      return res
+        .status(400)
+        .json({ message: "Verification has already been passed" });
+    }
+
+    const verificationToken = Mailer.generateVerificationToken();
+    user.verificationToken = verificationToken;
+    await user.save();
+    await Mailer.sendVerificationEmail(user.email, verificationToken);
+
+    res.status(200).json({ message: "Verification email sent" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+router.get("/verify/:verificationToken", async (req, res) => {
+  try {
+    const verificationToken = req.params.verificationToken;
+
+    const user = await User.findOne({ verificationToken });
+
+    if (!user) {
+      return res.status(404).json({ message: " User not found" });
+    }
+
+    user.verify = true;
+
+    await user.save();
+
+    user.verificationToken = null;
+
+    res.status(200).json({ message: "Verification successfully" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 module.exports = router;
