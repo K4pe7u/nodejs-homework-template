@@ -1,13 +1,11 @@
 const mongoose = require("mongoose");
 const Schema = mongoose.Schema;
 
-
 const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: [true, "Email is essential"],
     unique: true,
-  
   },
   password: {
     type: String,
@@ -30,8 +28,15 @@ const userSchema = new mongoose.Schema({
     type: Schema.Types.ObjectId,
     ref: "User",
   },
+  verify: {
+    type: Boolean,
+    default: false,
+  },
+  verificationToken: {
+    type: String,
+    required: [true, "Verify token is required"],
+  },
 });
-
 
 const User = mongoose.model("User", userSchema);
 
